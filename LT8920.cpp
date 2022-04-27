@@ -1,5 +1,6 @@
 #include <SPI.h>
 #include "LT8920.h"
+#include <Arduino.h>
 
 #define REGISTER_READ       0b10000000  //bin
 #define REGISTER_WRITE      0b00000000  //bin
@@ -40,7 +41,6 @@
 #define R_STATUS            48
 #define STATUS_CRC_BIT      15
 
-
 #define R_FIFO              50
 #define R_FIFO_CONTROL      52
 
@@ -55,9 +55,9 @@ void LT8920::dump_register(uint8_t reg) {
 LT8920::LT8920(const uint8_t cs, const uint8_t pkt, const uint8_t rst)
 {
   _pin_chipselect = cs;
-  _pin_pktflag = pkt;
-  _pin_reset = rst;
-  _channel = DEFAULT_CHANNEL;
+  _pin_pktflag    = pkt;
+  _pin_reset      = rst;
+  _channel        = DEFAULT_CHANNEL;
 
   pinMode(_pin_chipselect, OUTPUT);
   pinMode(_pin_pktflag, INPUT);
@@ -68,14 +68,33 @@ LT8920::LT8920(const uint8_t cs, const uint8_t pkt, const uint8_t rst)
 
 void LT8920::begin()
 {
-    if(_pin_reset > 0)
-    {
-        digitalWrite(_pin_reset, LOW);
-        delay(200);
-        digitalWrite(_pin_reset, HIGH);
-        delay(200);
-
-    }
+  #ifdef HARDWARE_SPI
+  #if (defined STM32F4xx) || (defined STM32F1xx) 
+  SPI.setMISO(U_SPI_MISO_PIN);
+	SPI.setMOSI(U_SPI_MOSI_PIN);
+	SPI.setSCLK(U_SPI_CLK_PIN);
+  SPI.begin();
+  #elif (defined ESP32)
+  SPI.begin(U_SPI_CLK_PIN,U_SPI_MISO_PIN,U_SPI_MOSI_PIN);
+  #elif (defined __AVR_ATmega328P__)
+  SPI.begin();
+  #endif
+  SPI.setClockDivider(SPI_CLOCK_DIV64);
+  SPI.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0)); 
+#else
+  pinMode(U_SPI_CLK_PIN, OUTPUT);  
+  pinMode(U_SPI_MOSI_PIN, OUTPUT); 
+  pinMode(U_SPI_MISO_PIN, INPUT); 
+  digitalWrite(U_SPI_CLK_PIN, LOW);
+  delay(1);
+#endif
+  if(_pin_reset > 0)
+  {
+      digitalWrite(_pin_reset, LOW);
+      delay(200);
+      digitalWrite(_pin_reset, HIGH);
+      delay(200);
+  }
   //setup
 
   writeRegister(0, 0x6fe0);
@@ -93,29 +112,29 @@ void LT8920::begin()
   writeRegister(13, 0x48bd);   //(default 4855)
 
   writeRegister(22, 0x00ff);
-  writeRegister(23, 0x8005);  //bit 2: Calibrate VCO before each Rx/Tx enable
+  writeRegister(23, 0x8005);   //bit 2: Calibrate VCO before each Rx/Tx enable
   writeRegister(24, 0x0067);
   writeRegister(25, 0x1659);
   writeRegister(26, 0x19e0);
-  writeRegister(27, 0x1300);  //bits 5:0, Crystal Frequency adjust
+  writeRegister(27, 0x1300);   //bits 5:0, Crystal Frequency adjust
   writeRegister(28, 0x1800);
 
   //fedcba9876543210
-  writeRegister(32, 0x5000);  //AAABBCCCDDEEFFFG  A preamble length, B, syncword length, c trailer length, d packet type
+  writeRegister(32, 0x5000);   //AAABBCCCDDEEFFFG  A preamble length, B, syncword length, c trailer length, d packet type
   //                  E FEC_type, F BRCLK_SEL, G reserved
   //0x5000 = 0101 0000 0000 0000 = preamble 010 (3 bytes), B 10 (48 bits)
   writeRegister(33, 0x3fc7);
   writeRegister(34, 0x2000);  //
-  writeRegister(35, 0x0300);  //POWER mode,  bit 8/9 on = retransmit = 3x (default)
+  writeRegister(35, 0x0500);  //POWER mode,  bit 8/9 on = retransmit = 3x (default)
   setSyncWord(0x03805a5a03800380);
 
   writeRegister(40, 0x4401);  //max allowed error bits = 0 (01 = 0 error bits)
-  writeRegister(R_PACKETCONFIG,
-      PACKETCONFIG_CRC_ON |
-      PACKETCONFIG_PACK_LEN_ENABLE |
-      PACKETCONFIG_FW_TERM_TX
-  );
-
+  //writeRegister(R_PACKETCONFIG,
+  //    PACKETCONFIG_CRC_ON |
+  //    PACKETCONFIG_PACK_LEN_ENABLE |
+  //    PACKETCONFIG_FW_TERM_TX
+  //);
+  writeRegister(41, 0xb800);
   writeRegister(42, 0xfdb0);
   writeRegister(43, 0x000f);
 
@@ -188,8 +207,6 @@ LT8920::DataRate LT8920::getDataRate()
       return LT8920_125KBPS;
     case DATARATE_62KBPS:
       return LT8920_62KBPS;
-    default:
-      break;
   }
   return ERR;
 }
@@ -197,9 +214,9 @@ LT8920::DataRate LT8920::getDataRate()
 uint16_t LT8920::readRegister(uint8_t reg)
 {
   digitalWrite(_pin_chipselect, LOW);
-  SPI.transfer(REGISTER_READ | (REGISTER_MASK & reg));
-  uint8_t high = SPI.transfer(0x00);
-  uint8_t low = SPI.transfer(0x00);
+  write_byte(REGISTER_READ | (REGISTER_MASK & reg));
+  uint8_t high = read_byte(0x00);
+  uint8_t low = read_byte(0x00);
 
   digitalWrite(_pin_chipselect, HIGH);
 
@@ -218,6 +235,44 @@ uint8_t LT8920::writeRegister(uint8_t reg, uint16_t data)
   return writeRegister2(reg, high, low);
 }
 
+void LT8920::write_byte(uint8_t data)
+{
+#ifdef HARDWARE_SPI
+    SPI.transfer(data);
+#elif (defined SOFTWARE_SPI)
+    for(uint8_t i = 0; i < 8; i++)
+    {     
+        uint8_t status;
+        status = data & (0x80 >> i);
+        digitalWrite(U_SPI_MOSI_PIN, status);
+        digitalWrite(U_SPI_CLK_PIN, LOW);
+        digitalWrite(U_SPI_CLK_PIN, HIGH);   
+    }
+#endif
+}
+
+/* Norflash read one byte */
+uint8_t LT8920::read_byte(uint8_t tx_data)
+{   
+#ifdef HARDWARE_SPI
+    uint8_t data = 0;
+    data = SPI.transfer(tx_data);
+    return data;
+#elif (defined SOFTWARE_SPI)
+    uint8_t i = 0, data = 0;
+    for(i = 0; i < 8; i++)
+    {        
+        digitalWrite(U_SPI_CLK_PIN, HIGH);
+        digitalWrite(U_SPI_CLK_PIN, LOW);
+        if(digitalRead(U_SPI_MISO_PIN)) 
+        {
+            data |= 0x80 >> i;
+        }
+    }
+    return data;
+#endif
+}
+
 uint8_t LT8920::writeRegister2(uint8_t reg, uint8_t high, uint8_t low)
 {
 
@@ -225,11 +280,10 @@ uint8_t LT8920::writeRegister2(uint8_t reg, uint8_t high, uint8_t low)
   // sprintf_P(sbuf, PSTR("%d => %02x%02x"), reg, high, low);
   // Serial.println(sbuf);
 
-
   digitalWrite(_pin_chipselect, LOW);
-  uint8_t result = SPI.transfer(REGISTER_WRITE | (REGISTER_MASK & reg));
-  SPI.transfer(high);
-  SPI.transfer(low);
+  uint8_t result = read_byte(REGISTER_WRITE | (REGISTER_MASK & reg));
+  write_byte(high);
+  write_byte(low);
 
   digitalWrite(_pin_chipselect, HIGH);
   return result;
@@ -305,7 +359,7 @@ int LT8920::read(uint8_t *buffer, size_t maxBuffer)
         return -2;
     }
 
-    uint8_t pos;
+    uint8_t pos = 0;
     buffer[pos++] = (data & 0xFF);
     while (pos < packetSize)
     {

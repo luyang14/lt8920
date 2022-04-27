@@ -8,6 +8,38 @@
 
 #ifndef LT8920_H
 #define LT8920_H
+#include <Arduino.h>
+
+//#define STM32
+
+//#define HARDWARE_SPI           // use hardware spi
+#define SOFTWARE_SPI           // use software spi
+
+#if (defined STM32F4xx) || (defined STM32F1xx) 
+#ifndef U_SPI_CLK_PIN
+#define U_SPI_CLK_PIN        PB3   
+#endif 
+#ifndef U_SPI_MOSI_PIN  
+#define U_SPI_MOSI_PIN       PB5 
+#endif      
+#ifndef U_SPI_MISO_PIN
+#define U_SPI_MISO_PIN       PB4
+#endif
+#elif ESP32
+#ifndef U_SPI_CS_PIN
+#define U_SPI_CS_PIN         4
+#endif
+#ifndef U_SPI_CLK_PIN
+#define U_SPI_CLK_PIN        5  
+#endif
+#ifndef U_SPI_MOSI_PIN     
+#define U_SPI_MOSI_PIN       6 
+#endif
+#ifndef U_SPI_MISO_PIN     
+#define U_SPI_MISO_PIN       7
+#endif
+#endif
+#define SPI_FREQUENCY           40 * 1000000
 
 class LT8920
 {
@@ -21,7 +53,7 @@ class LT8920
       LT8920_250KBPS,   /** 250 Kpbs, only on lt8910 */
       LT8920_125KBPS,   /** 125 Kbps, only on lt8910 */
       LT8920_62KBPS,    /** 62 Kbps, only on lt8910 */
-      ERR               /** err */
+      ERR
     };
 
   private:
@@ -82,7 +114,10 @@ class LT8920
     * @param low bits 7..0  */
     uint8_t writeRegister2(uint8_t reg, uint8_t high, uint8_t low);
 
-	void dump_register(uint8_t reg);
+    void write_byte(uint8_t data);
+    uint8_t read_byte(uint8_t tx_data);
+
+	  void dump_register(uint8_t reg);
 	
     /** Put the LT8920 module to sleep mode.
      * In contrast to POWER DOWN, this mode will keep the register values
